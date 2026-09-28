@@ -180,13 +180,13 @@ archivo_subido = st.file_uploader("Selecciona el archivo Excel", type=["xlsx", "
 
 if archivo_subido is not None:
     st.info(f"Archivo cargado: **{archivo_subido.name}**")
-    
+
     if st.button("Generar Presentación PPTX", type="primary"):
         with st.spinner("Procesando datos y formateando diapositivas..."):
             try:
                 buffer, nombre_salida = procesar_presentacion(archivo_subido.read())
                 st.success("¡Presentación generada con éxito!")
-                
+
                 st.download_button(
                     label="📥 Descargar Presentación",
                     data=buffer,
