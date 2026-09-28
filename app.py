@@ -60,7 +60,6 @@ def extraer_tabla_kv(wb: openpyxl.Workbook, nombre_tabla: str) -> Dict[str, Any]
         keys, values = data_rows[0], data_rows[1]
         for i, key in enumerate(keys):
             if key and i < len(values) and pd.notna(values[i]):
-                # Se guarda normalizado y original
                 datos[limpiar_texto(key)] = values[i]
                 datos[str(key).strip()] = values[i]
     return datos
@@ -87,19 +86,26 @@ def preparar_dict_qa(df: pd.DataFrame) -> Dict[str, pd.Series]:
             diccionario[llave] = fila
     return diccionario
 
+def obtener_valor_campo(fila_excel: pd.Series, patron: str) -> str:
+    """Busca en la fila de Excel una columna cuyo nombre coincida con el patrón."""
+    for col in fila_excel.index:
+        col_clean = limpiar_texto(col)
+        if patron in col_clean:
+            val = fila_excel[col]
+            return str(val) if pd.notna(val) else ''
+    return ''
+
 # ==========================================
 # MOTOR DE GENERACIÓN
 # ==========================================
 def procesar_presentacion(excel_bytes: bytes) -> Tuple[io.BytesIO, str, Dict[str, Any]]:
-    # Usamos BytesIO asegurando lectura limpia desde el inicio
     excel_stream = io.BytesIO(excel_bytes)
     wb = openpyxl.load_workbook(excel_stream, data_only=True)
 
-    # 1. Extracción de tablas generales separadas (evita sobrescrituras)
+    # 1. Extracción de tablas generales
     datos_gen_cal = extraer_tabla_kv(wb, TABLA_GEN_CAL)
     datos_gen_riesgo = extraer_tabla_kv(wb, TABLA_GEN_RIESGO)
 
-    # Si Riesgo1 no tiene datos, usa DatosGenerales como respaldo
     if not datos_gen_riesgo:
         datos_gen_riesgo = datos_gen_cal
 
@@ -119,7 +125,6 @@ def procesar_presentacion(excel_bytes: bytes) -> Tuple[io.BytesIO, str, Dict[str
 
     # 3. Procesamiento de diapositivas
     for slide in prs.slides:
-        # Detectar si la diapositiva es de Riesgo
         es_slide_riesgo = False
         for shape in slide.shapes:
             if shape.has_text_frame and "riesgo" in shape.text.lower():
@@ -133,7 +138,7 @@ def procesar_presentacion(excel_bytes: bytes) -> Tuple[io.BytesIO, str, Dict[str
                 continue
             tabla = shape.table
 
-            # Recolectar preguntas de la tabla en PPT
+            # Identificar preguntas presentes en la tabla de PPT
             preguntas_ppt = []
             for i, row in enumerate(tabla.rows):
                 if i > 0:
@@ -148,7 +153,6 @@ def procesar_presentacion(excel_bytes: bytes) -> Tuple[io.BytesIO, str, Dict[str
             if matches_cal > 0 or matches_riesgo > 0:
                 tipo = "CALIFICACIÓN" if matches_cal >= matches_riesgo else "RIESGO"
                 datos_excel = dict_cal if tipo == "CALIFICACIÓN" else dict_riesgo
-                df_usar = df_cal if tipo == "CALIFICACIÓN" else df_riesgo
 
                 for i, row in enumerate(tabla.rows):
                     if i == 0:
@@ -156,11 +160,20 @@ def procesar_presentacion(excel_bytes: bytes) -> Tuple[io.BytesIO, str, Dict[str
                     clave = limpiar_texto(row.cells[0].text)
                     if clave in datos_excel:
                         fila = datos_excel[clave]
-                        # Relleno posicional seguro
-                        for j in range(1, len(row.cells)):
-                            if j < len(df_usar.columns):
-                                col_nombre = df_usar.columns[j]
-                                aplicar_formato_texto(row.cells[j], fila.get(col_nombre, ''))
+
+                        # 1. Rellenar columna 'Respuesta' (columna 1 de PPT)
+                        respuesta = obtener_valor_campo(fila, 'respuesta')
+                        if len(row.cells) > 1:
+                            aplicar_formato_texto(row.cells[1], respuesta)
+
+                        # 2. Rellenar columna 'Comentario/Mitigación' (columna 2 de PPT)
+                        # Busca por 'comentario' o por 'mitiga' para evitar problemas con columnas numéricas intermedias
+                        comentario = obtener_valor_campo(fila, 'comentario')
+                        if not comentario:
+                            comentario = obtener_valor_campo(fila, 'mitiga')
+
+                        if len(row.cells) > 2:
+                            aplicar_formato_texto(row.cells[2], comentario)
             else:
                 # Tabla superior (Clave-Valor)
                 for row in tabla.rows:
@@ -198,7 +211,6 @@ archivo_subido = st.file_uploader(
 )
 
 if archivo_subido is not None:
-    # Usar .getvalue() para garantizar lectura limpia de los bytes actuales
     contenido_excel = archivo_subido.getvalue()
 
     with st.spinner("Procesando Excel y rellenando PowerPoint..."):
@@ -207,7 +219,6 @@ if archivo_subido is not None:
             
             st.success("¡Presentación generada correctamente!")
             
-            # Vista previa rápida de confirmación de datos
             st.caption(f"📌 **Datos detectados:** Cliente: `{info_detectada.get('cliente', 'N/A')}` | Oportunidad: `{info_detectada.get('nombre_oportunidad', info_detectada.get('Nombre Oportunidad (Código NCC)', 'N/A'))}`")
 
             st.download_button(
